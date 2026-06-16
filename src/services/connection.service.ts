@@ -53,36 +53,60 @@ export const connectionService = {
   },
 
   async getConnections(userId: string): Promise<Connection[]> {
-    const { data, error } = await supabase
+    // Step 1: fetch accepted connections involving user
+    const { data: conns, error: connsErr } = await supabase
       .from('connections')
-      .select(
-        `
-        *,
-        profiles!connections_requester_id_fkey (id, username, display_name, avatar_url),
-        profiles!connections_receiver_id_fkey (id, username, display_name, avatar_url)
-      `
-      )
+      .select('*')
       .or(`requester_id.eq.${userId},receiver_id.eq.${userId}`)
       .eq('status', 'accepted')
       .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data || [];
+    if (connsErr) throw connsErr;
+
+    const rows = conns || [];
+    if (rows.length === 0) return [];
+
+    // collect other participant ids
+    const otherIds = rows.map((r: any) => (r.requester_id === userId ? r.receiver_id : r.requester_id));
+    const uniqIds = Array.from(new Set(otherIds));
+
+    // fetch profiles for other participants
+    const { data: profiles, error: profilesErr } = await supabase
+      .from('profiles')
+      .select('id, username, display_name, avatar_url')
+      .in('id', uniqIds);
+    if (profilesErr) throw profilesErr;
+
+    const profileMap = new Map((profiles || []).map((p: any) => [p.id, p]));
+
+    // attach profile to connection
+    return rows.map((r: any) => ({
+      ...r,
+      requester: profileMap.get(r.requester_id) || null,
+      receiver: profileMap.get(r.receiver_id) || null,
+    }));
   },
 
   async getPendingRequests(userId: string): Promise<Connection[]> {
-    const { data, error } = await supabase
+    const { data: rows, error } = await supabase
       .from('connections')
-      .select(
-        `
-        *,
-        profiles!connections_requester_id_fkey (id, username, display_name, avatar_url)
-      `
-      )
+      .select('*')
       .eq('receiver_id', userId)
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
     if (error) throw error;
-    return data || [];
+
+    const requesterIds = Array.from(new Set((rows || []).map((r: any) => r.requester_id)));
+    if (requesterIds.length === 0) return rows || [];
+
+    const { data: profiles, error: profilesErr } = await supabase
+      .from('profiles')
+      .select('id, username, display_name, avatar_url')
+      .in('id', requesterIds);
+    if (profilesErr) throw profilesErr;
+
+    const profileMap = new Map((profiles || []).map((p: any) => [p.id, p]));
+
+    return (rows || []).map((r: any) => ({ ...r, requester: profileMap.get(r.requester_id) || null }));
   },
 
   async areConnected(userId1: string, userId2: string): Promise<boolean> {
