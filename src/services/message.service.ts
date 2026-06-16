@@ -44,28 +44,34 @@ export const messageService = {
         `
         conversation_id,
         conversations!inner (id, created_at),
-        participants:conversation_participants!inner (
-          user_id,
-          profiles!conversation_participants_user_id_fkey (id, username, display_name, avatar_url)
-        )
+        user_id,
+        profiles!conversation_participants_user_id_fkey (id, username, display_name, avatar_url)
       `
       )
       .eq('user_id', userId);
     if (error) throw error;
 
-    // Transform the data
-    const conversations = (data as any[]).map((item: any) => {
-      const otherParticipants = item.participants?.filter(
-        (p: any) => p.user_id !== userId
-      ) || [];
-      return {
-        id: item.conversation_id,
-        created_at: item.conversations?.created_at,
-        participants: otherParticipants.map((p: any) => p.profiles),
-      };
-    });
+    // Group rows by conversation_id and build participants list (exclude current user)
+    const rows = (data as any[]) || [];
+    const map: Record<string, any> = {};
+    for (const row of rows) {
+      const cid = row.conversation_id;
+      if (!map[cid]) {
+        map[cid] = {
+          id: cid,
+          created_at: row.conversations?.created_at,
+          participants: [],
+        };
+      }
 
-    return conversations;
+      // profiles may come as object or array from Supabase; normalize to single profile object
+      const prof = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
+      if (prof && prof.id !== userId) {
+        map[cid].participants.push(prof);
+      }
+    }
+
+    return Object.values(map);
   },
 
   async getMessages(conversationId: string): Promise<Message[]> {
